@@ -144,7 +144,7 @@ class CPCA(TransformerMixin):
             active and background dataset. It automatically determines n_alphas=4 important values
             of alpha up to based to the power of 10^(max_log_alpha=5) on spectral clustering
             of the top subspaces identified by cPCA.
-            The final return value is the data projected into the top (n_components = 2)
+            The final return value is the data projected into the top n subspaces with (n_components = 2)
             subspaces, which can be plotted outside of this function
         """
         best_alphas, all_alphas, _, _ = self.find_spectral_alphas()
@@ -173,15 +173,26 @@ class CPCA(TransformerMixin):
             Returns active and bg dataset projected in the cpca direction, as well as the top c_cpca eigenvalues indices.
             If specified, it returns the top_cpca directions
         """
+        # fit
         sigma = self.fg_cov - alpha * self.bg_cov
         w, v = LA.eig(sigma)
         eig_idx = np.argpartition(w, -self.n_components)[-self.n_components:]
         eig_idx = eig_idx[np.argsort(-w[eig_idx])]
         v_top = v[:, eig_idx]
+
+        # transform
         reduced_dataset = dataset.dot(v_top)
+        # todo: why only first two dimensions?
+        sign_vector = np.sign(reduced_dataset, axis=0)
+        reduced_dataset = reduced_dataset * sign_vector
+
         reduced_dataset[:, 0] = reduced_dataset[:, 0]*np.sign(reduced_dataset[0, 0])
         reduced_dataset[:, 1] = reduced_dataset[:, 1]*np.sign(reduced_dataset[0, 1])
         return reduced_dataset
+
+    # def reverse_transform(self, dataset):
+    #     reverter=pseudo_inverse(v_top)
+    #     return dataset.dot(reverter)
 
     def find_spectral_alphas(self):
         """
@@ -221,9 +232,10 @@ class CPCA(TransformerMixin):
             subspaces.append(q)
         for i in range(k):
             for j in range(i+1, k):
-                q0 = subspaces[i]
-                q1 = subspaces[j]
-                u, s, v = np.linalg.svd(q0.T.dot(q1))
+                v0 = subspaces[i]
+                v1 = subspaces[j]
+                u, s, v = np.linalg.svd(v0.T.dot(v1))
+                affinity[i, j] = np.prod([np.cos(eigendings) for eigendings in s])
                 affinity[i, j] = s[0]*s[1]
         affinity = affinity + affinity.T
         return np.nan_to_num(affinity)
@@ -234,6 +246,7 @@ class CPCA(TransformerMixin):
             raise ValueError('In order to use gui mode, set alpha_selection to "auto"')
 
         if not self.n_components == 2:
+            # todo: RAISING SUCKS !!!!!!
             raise Warning('Plot cannot be used if the number of components is not 2. '
                           'Plot will only use the first two components.')
 
@@ -409,6 +422,7 @@ class Kernel_CPCA(CPCA):
             A_norm[i]=np.sqrt(A[:,i].dot(K).dot(A[:,i]).clip(min=0))
             A[:,i]/=A_norm[i]+1e-15
 
+        # todo: why -2
         Z_proj_kernel=K.dot(A[:,-2:])
         X_proj_kernel=Z_proj_kernel[0:n, :]
         Y_proj_kernel=Z_proj_kernel[n:, :]
