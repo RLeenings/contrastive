@@ -18,7 +18,7 @@ class CPCA(TransformerMixin):
     are used to project the data to a lower dimensional space.
     """
 
-    def __init__(self, n_components=2, standardize=True, preprocess_with_pca_dim: int = 1000,
+    def __init__(self, n_components=2, alpha_value=None, standardize=True, preprocess_with_pca_dim: int = 1000,
                  alpha_selection='auto', n_alphas=40, max_log_alpha=3, n_alphas_to_return=4,
                  verbose=False):
         """
@@ -35,6 +35,7 @@ class CPCA(TransformerMixin):
         self.n_alphas_to_return = n_alphas_to_return
         self.standardize = standardize
         self.n_components = n_components
+        self.alpha_value = alpha_value
         self.preprocess_with_pca_dim = preprocess_with_pca_dim
         self.verbose = verbose
 
@@ -42,6 +43,7 @@ class CPCA(TransformerMixin):
         self.fitted = False
         self.pca, self.pca_directions, self.bg_eig_vals, self.affinity_matrix, self.bg_cov, self.fg_cov = None
         self.fg, self.bg, self.n_fg, self.features_d, self.n_bg, self.features_d_bg, self.alpha_values = None
+        self.v_top = None
 
     def fit_transform(self, foreground, background):
         """
@@ -110,16 +112,7 @@ class CPCA(TransformerMixin):
         if self.verbose:
             print("Covariance matrices computed")
 
-        self.fitted = True
-        return True
-
-    def transform(self, dataset, y=None, **kwargs):
-        self.alpha_values = None
-
-        if not self.fitted:
-            raise NotFittedError("This model has not been fit to a foreground/background dataset yet. "
-                                 "Please run the fit() function first.")
-
+        # todo: find alpha
         if self.alpha_selection not in ['auto', 'manual', 'all']:
             raise ValueError("Invalid argument for parameter alpha_selection: must be 'auto' or 'manual' or 'all'")
 
@@ -127,16 +120,70 @@ class CPCA(TransformerMixin):
             raise ValueError('The the alpha_selection parameter is set to "manual", '
                              'the alpha_value parameter must be provided')
 
+        self.alpha_values = None
         if self.alpha_selection == 'auto':
             transformed_data, best_alphas = self.automated_cpca(dataset)
             self.alpha_values = best_alphas
-        elif self.alpha_selection == 'all':
-            transformed_data, all_alphas = self.all_cpca(dataset)
-            self.alpha_values = all_alphas
+        # elif self.alpha_selection == 'all':
+        #     transformed_data, all_alphas = self.all_cpca(dataset)
+        #     self.alpha_values = all_alphas
         else:
-            transformed_data = self.cpca_alpha(dataset)
+            self.v_top = self.alpha_space(self.alpha_value)
             self.alpha_values = [self.alpha_value]
+        self.fitted = True
+        return True
+
+    def transform(self, dataset, y=None, **kwargs):
+        if not self.fitted:
+            raise NotFittedError("This model has not been fit to a foreground/background dataset yet. "
+                                 "Please run the fit() function first.")
+        transformed_data = self.cpca_alpha(dataset, self.v_top, self.alpha_value)
         return transformed_data
+
+    def all_cpca(self, dataset):
+        """
+            This function performs contrastive PCA using the alpha technique on the
+            active and background dataset. It returns the cPCA-reduced data for all values of alpha specified,
+            both the active and background, as well as the list of alphas
+        """
+        alphas = self.generate_alphas()
+        data_to_plot = []
+        for alpha in alphas:
+            transformed_dataset = self.cpca_alpha(dataset=dataset, alpha=alpha)
+            data_to_plot.append(transformed_dataset)
+        return data_to_plot, alphas
+
+    def alpha_space(self, alpha):
+        # fit
+        sigma = self.fg_cov - alpha * self.bg_cov
+        w, v = LA.eig(sigma)
+        eig_idx = np.argpartition(w, -self.n_components)[-self.n_components:]
+        eig_idx = eig_idx[np.argsort(-w[eig_idx])]
+        v_top = v[:, eig_idx]
+        return v_top
+
+    def cpca_alpha(self, dataset, v_top, alpha=1):
+        """
+            Returns active and bg dataset projected in the cpca direction, as well as the top c_cpca eigenvalues indices.
+            If specified, it returns the top_cpca directions
+        """
+
+        # transform
+        reduced_dataset = dataset.dot(v_top)
+        # todo: why only first two dimensions?
+        sign_vector = np.sign(reduced_dataset, axis=0)
+        reduced_dataset = reduced_dataset * sign_vector
+
+        # reduced_dataset[:, 0] = reduced_dataset[:, 0]*np.sign(reduced_dataset[0, 0])
+        # reduced_dataset[:, 1] = reduced_dataset[:, 1]*np.sign(reduced_dataset[0, 1])
+        return reduced_dataset
+
+    # def reverse_transform(self, dataset):
+    #     reverter=pseudo_inverse(v_top)
+    #     return dataset.dot(reverter)
+
+    def generate_alphas(self):
+        return np.concatenate(([0], np.logspace(-1, self.max_log_alpha, self.n_alphas)))
 
     def automated_cpca(self, dataset):
         """
@@ -154,45 +201,6 @@ class CPCA(TransformerMixin):
             transformed_dataset = self.cpca_alpha(dataset=dataset, alpha=alpha)
             data_to_plot.append(transformed_dataset)
         return data_to_plot, best_alphas
-
-    def all_cpca(self, dataset):
-        """
-            This function performs contrastive PCA using the alpha technique on the
-            active and background dataset. It returns the cPCA-reduced data for all values of alpha specified,
-            both the active and background, as well as the list of alphas
-        """
-        alphas = self.generate_alphas()
-        data_to_plot = []
-        for alpha in alphas:
-            transformed_dataset = self.cpca_alpha(dataset=dataset, alpha=alpha)
-            data_to_plot.append(transformed_dataset)
-        return data_to_plot, alphas
-
-    def cpca_alpha(self, dataset, alpha=1):
-        """
-            Returns active and bg dataset projected in the cpca direction, as well as the top c_cpca eigenvalues indices.
-            If specified, it returns the top_cpca directions
-        """
-        # fit
-        sigma = self.fg_cov - alpha * self.bg_cov
-        w, v = LA.eig(sigma)
-        eig_idx = np.argpartition(w, -self.n_components)[-self.n_components:]
-        eig_idx = eig_idx[np.argsort(-w[eig_idx])]
-        v_top = v[:, eig_idx]
-
-        # transform
-        reduced_dataset = dataset.dot(v_top)
-        # todo: why only first two dimensions?
-        sign_vector = np.sign(reduced_dataset, axis=0)
-        reduced_dataset = reduced_dataset * sign_vector
-
-        reduced_dataset[:, 0] = reduced_dataset[:, 0]*np.sign(reduced_dataset[0, 0])
-        reduced_dataset[:, 1] = reduced_dataset[:, 1]*np.sign(reduced_dataset[0, 1])
-        return reduced_dataset
-
-    # def reverse_transform(self, dataset):
-    #     reverter=pseudo_inverse(v_top)
-    #     return dataset.dot(reverter)
 
     def find_spectral_alphas(self):
         """
@@ -215,9 +223,6 @@ class CPCA(TransformerMixin):
                 best_alphas.append(alphas[exemplar_idx])
         return np.sort(best_alphas), alphas, self.affinity_matrix[0, :], labels
 
-    def generate_alphas(self):
-        return np.concatenate(([0], np.logspace(-1, self.max_log_alpha, self.n_alphas)))
-
     def create_affinity_matrix(self):
         """
             This method creates the affinity matrix of subspaces returned by contrastive pca
@@ -227,7 +232,8 @@ class CPCA(TransformerMixin):
         k = len(alphas)
         affinity = 0.5*np.identity(k)  # it gets doubled
         for alpha in alphas:
-            space = self.cpca_alpha(dataset=self.fg, alpha=alpha)
+            v_top = self.alpha_space(alpha=alpha)
+            space = self.cpca_alpha(dataset=self.fg, v_top=v_top, alpha=alpha)
             q, r = np.linalg.qr(space)
             subspaces.append(q)
         for i in range(k):
