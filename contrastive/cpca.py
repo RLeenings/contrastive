@@ -122,14 +122,11 @@ class CPCA(TransformerMixin):
 
         self.alpha_values = None
         if self.alpha_selection == 'auto':
-            transformed_data, best_alphas = self.automated_cpca(dataset)
-            self.alpha_values = best_alphas
-        # elif self.alpha_selection == 'all':
-        #     transformed_data, all_alphas = self.all_cpca(dataset)
-        #     self.alpha_values = all_alphas
-        else:
-            self.v_top = self.alpha_space(self.alpha_value)
-            self.alpha_values = [self.alpha_value]
+            self.alpha_value = self.automated_cpca(dataset)
+            # self.alpha_values = best_alphas
+        # else:
+            # self.alpha_values = [self.alpha_value]
+        self.v_top = self.alpha_space(self.alpha_value)
         self.fitted = True
         return True
 
@@ -137,21 +134,10 @@ class CPCA(TransformerMixin):
         if not self.fitted:
             raise NotFittedError("This model has not been fit to a foreground/background dataset yet. "
                                  "Please run the fit() function first.")
+
+        # todo: preprocess with pca if dimension of dataset was too big
         transformed_data = self.cpca_alpha(dataset, self.v_top, self.alpha_value)
         return transformed_data
-
-    def all_cpca(self, dataset):
-        """
-            This function performs contrastive PCA using the alpha technique on the
-            active and background dataset. It returns the cPCA-reduced data for all values of alpha specified,
-            both the active and background, as well as the list of alphas
-        """
-        alphas = self.generate_alphas()
-        data_to_plot = []
-        for alpha in alphas:
-            transformed_dataset = self.cpca_alpha(dataset=dataset, alpha=alpha)
-            data_to_plot.append(transformed_dataset)
-        return data_to_plot, alphas
 
     def alpha_space(self, alpha):
         # fit
@@ -194,34 +180,49 @@ class CPCA(TransformerMixin):
             The final return value is the data projected into the top n subspaces with (n_components = 2)
             subspaces, which can be plotted outside of this function
         """
-        best_alphas, all_alphas, _, _ = self.find_spectral_alphas()
-        best_alphas = np.concatenate(([0], best_alphas))  # one of the alphas is always alpha=0
-        data_to_plot = []
-        for alpha in best_alphas:
-            transformed_dataset = self.cpca_alpha(dataset=dataset, alpha=alpha)
-            data_to_plot.append(transformed_dataset)
-        return data_to_plot, best_alphas
+        best_alpha = self.find_spectral_alphas()
+        # data_to_plot = []
+        # for alpha in best_alphas:
+        #     transformed_dataset = self.cpca_alpha(dataset=dataset, alpha=alpha)
+        #     data_to_plot.append(transformed_dataset)
+        return best_alphas
 
     def find_spectral_alphas(self):
         """
             This method performs spectral clustering on the affinity matrix of subspaces
-            returned by contrastive pca, and returns (`=3) exemplar values of alpha
+            returned by contrastive pca, and returns (n_alphas_to_return) exemplar values of alpha
         """
         self.affinity_matrix = self.create_affinity_matrix()
         alphas = self.generate_alphas()
+        # todo: actually we dont know if we can represent similarities in n_alphas_to-return clusters?
+        # what if the medium value of the cluster is in a land of nowhere in-between two bubbles?
         spectral = cluster.SpectralClustering(n_clusters=self.n_alphas_to_return, affinity='precomputed')
         spectral.fit(self.affinity_matrix)
         labels = spectral.labels_
         
         best_alphas = list()
+        best_distance = None
+        best_alpha = None
         for i in range(self.n_alphas_to_return):
+            # todo: how do we know which works best?
             idx = np.where(labels == i)[0]
-            if not(0 in idx):  # because we don't want to include the cluster that includes alpha=0
+            if not(0 in idx):  # because we don't want to include the cluster that includes alpha=0 #todo: ????
                 affinity_submatrix = self.affinity_matrix[idx][:, idx]
                 sum_affinities = np.sum(affinity_submatrix, axis=0)
-                exemplar_idx = idx[np.argmax(sum_affinities)]
-                best_alphas.append(alphas[exemplar_idx])
-        return np.sort(best_alphas), alphas, self.affinity_matrix[0, :], labels
+                # this should be the cluster center?
+                # take the one where the affinity sum is biggest
+                # = where foreground and background are most dissimilarly represented
+                max_affinity_sum = np.max(sum_affinities)
+                best_cluster_alpha = alphas[idx[np.argmax(sum_affinities)]]
+                if best_distance is None:
+                    best_distance = max_affinity_sum
+                    best_alpha = best_cluster_alpha
+                elif max_affinity_sum > best_distance:
+                    best_distance = max_affinity_sum
+                    best_alpha = best_cluster_alpha
+                best_alphas.append(best_cluster_alpha)
+        best_alphas = np.concatenate(([0], best_alphas))  # one of the alphas is always alpha=0
+        return best_alpha
 
     def create_affinity_matrix(self):
         """
@@ -245,6 +246,19 @@ class CPCA(TransformerMixin):
                 affinity[i, j] = s[0]*s[1]
         affinity = affinity + affinity.T
         return np.nan_to_num(affinity)
+
+    def all_cpca(self, dataset):
+        """
+            This function performs contrastive PCA using the alpha technique on the
+            active and background dataset. It returns the cPCA-reduced data for all values of alpha specified,
+            both the active and background, as well as the list of alphas
+        """
+        alphas = self.generate_alphas()
+        data_to_plot = []
+        for alpha in alphas:
+            transformed_dataset = self.cpca_alpha(dataset=dataset, alpha=alpha)
+            data_to_plot.append(transformed_dataset)
+        return data_to_plot, alphas
 
     def gui(self, background, foreground, active_labels=None, colors=['k', 'r', 'b', 'g', 'c']):
 
