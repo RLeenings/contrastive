@@ -84,7 +84,7 @@ class Dataset(object):
     
     # A helper method to standardize arrays
     def standardize(self, array):
-        standardized_array =  (array-np.mean(array,axis=0)) / np.std(array,axis=0)
+        standardized_array = (array-np.mean(array, axis=0)) / np.std(array, axis=0)
         return np.nan_to_num(standardized_array)
 
     """ 

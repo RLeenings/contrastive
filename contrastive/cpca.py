@@ -1,11 +1,12 @@
-from __future__ import print_function
 import numpy as np
 from numpy import linalg as LA
-from sklearn import cluster
+from sklearn.cluster import SpectralClustering
+from sklearn.linear_model import LinearRegression
 from sklearn.decomposition import PCA
-from sklearn.preprocessing import StandardScaler
 from sklearn.base import TransformerMixin
+from sklearn.metrics import silhouette_score
 from sklearn.exceptions import NotFittedError
+import matplotlib.pyplot as plt
 
 
 class CPCA(TransformerMixin):
@@ -29,33 +30,38 @@ class CPCA(TransformerMixin):
              dimensionality to 1,000.
         """
 
+        self.alpha_value = alpha_value
         self.alpha_selection = alpha_selection
         self.n_alphas = n_alphas
         self.max_log_alpha = max_log_alpha
         self.n_alphas_to_return = n_alphas_to_return
         self.standardize = standardize
         self.n_components = n_components
-        self.alpha_value = alpha_value
         self.preprocess_with_pca_dim = preprocess_with_pca_dim
         self.verbose = verbose
 
         # Housekeeping
         self.fitted = False
-        self.pca, self.pca_directions, self.bg_eig_vals, self.affinity_matrix, self.bg_cov, self.fg_cov = None
-        self.fg, self.bg, self.n_fg, self.features_d, self.n_bg, self.features_d_bg, self.alpha_values = None
-        self.v_top = None
+        self.pca = None
+        self.affinity_matrix = None
+        self.bg_cov = None
+        self.fg_cov = None
 
-    def fit_transform(self, foreground, background):
+        self.v_top = None
+        self.alpha_values = None
+
+    def fit_transform(self, foreground, background, labels=None):
         """
             Finds the covariance matrices of the foreground and background datasets,
             and then transforms the foreground dataset based on the principal contrastive components
 
             Parameters: see self.fit() and self.transform() for parameter description
         """
-        self.fit(foreground, background)
-        return self.transform(dataset=self.fg)
+        self.fit(foreground, background, labels)
+        return self.transform(dataset=foreground)
 
-    def fit(self, foreground, background):
+# todo: rename to foreground and background
+    def fit(self, fg, bg, labels=None):
         """
         Computes the covariance matrices of the foreground and background datasets
 
@@ -66,37 +72,38 @@ class CPCA(TransformerMixin):
 
         background : array, shape (n_data_points, n_features)
             The dataset in which the interesting directions that we would like to discover are absent or unenriched
-
-
         """
         # Reset
-        self.pca, self.pca_directions, self.bg_eig_vals, self.affinity_matrix, self.bg_cov, self.fg_cov = None
         self.fitted = False
+        self.pca = None
+        self.affinity_matrix = None
+        self.bg_cov = None
+        self.fg_cov = None
+        self.v_top = None
+        self.alpha_values = None
 
         # Datasets and dataset sizes
-        self.fg = foreground
-        self.bg = background
-        self.n_fg, self.features_d = foreground.shape
-        self.n_bg, self.features_d_bg = background.shape
+        n_fg, features_d = fg.shape
+        n_bg, features_d_bg = bg.shape
 
-        if not(self.features_d == self.features_d_bg):
+        if features_d != features_d_bg:
             raise ValueError('The dimensionality of the foreground and background datasets must be the same')
 
         # center the background and foreground data
         if self.standardize:  # Standardize if specified
-            self.bg = StandardScaler().fit_transform(self.bg)
-            self.fg = StandardScaler().fit_transform(self.fg)
-        else:
-            self.bg = self.bg - np.mean(self.bg, axis=0)
-            self.fg = self.fg - np.mean(self.fg, axis=0)
+            bg = self._standardize(bg)
+            fg = self._standardize(fg)
 
-        if self.features_d > self.preprocess_with_pca_dim:
-            data = np.concatenate((self.fg, self.bg), axis=0)
+        bg = bg - np.mean(bg, axis=0)
+        fg = fg - np.mean(fg, axis=0)
+
+        if features_d > self.preprocess_with_pca_dim:
+            data = np.concatenate((fg, bg), axis=0)
             self.pca = PCA(n_components=self.preprocess_with_pca_dim)
             data = self.pca.fit_transform(data)
-            self.fg = data[:self.n_fg, :]
-            self.bg = data[self.n_fg:, :]
-            self.features_d = self.preprocess_with_pca_dim
+            fg = data[:n_fg, :]
+            bg = data[n_fg:, :]
+            features_d = self.preprocess_with_pca_dim
 
             if self.verbose:
                 print("Data dimensionality reduced to " + str(self.preprocess_with_pca_dim) +
@@ -106,8 +113,8 @@ class CPCA(TransformerMixin):
             print("Data loaded and preprocessed")
 
         # Calculate the covariance matrices
-        self.bg_cov = self.bg.T.dot(self.bg)/(self.bg.shape[0]-1)
-        self.fg_cov = self.fg.T.dot(self.fg)/(self.n_fg-1)
+        self.bg_cov = bg.T.dot(bg)/(bg.shape[0]-1)
+        self.fg_cov = fg.T.dot(fg)/(n_fg-1)
 
         if self.verbose:
             print("Covariance matrices computed")
@@ -122,13 +129,17 @@ class CPCA(TransformerMixin):
 
         self.alpha_values = None
         if self.alpha_selection == 'auto':
-            self.alpha_value = self.automated_cpca(dataset)
-            # self.alpha_values = best_alphas
-        # else:
-            # self.alpha_values = [self.alpha_value]
+            self.alpha_values = self.find_spectral_alphas(fg)  # self.automated_cpca(dataset)
+            if labels is not None:
+                self.alpha_value = self.select_most_discriminating_alpha(fg, labels, self.alpha_values)
+            else:
+                # todo: !
+                self.alpha_value = self.alpha_values[-1]
+        elif self.alpha_selection == 'manual':
+            self.alpha_values = [self.alpha_value]
         self.v_top = self.alpha_space(self.alpha_value)
         self.fitted = True
-        return True
+        return self
 
     def transform(self, dataset, y=None, **kwargs):
         if not self.fitted:
@@ -138,6 +149,10 @@ class CPCA(TransformerMixin):
         # todo: preprocess with pca if dimension of dataset was too big
         transformed_data = self.cpca_alpha(dataset, self.v_top, self.alpha_value)
         return transformed_data
+
+    def _standardize(self, array):
+        standardized_array = (array - np.mean(array, axis=0)) / np.std(array, axis=0)
+        return np.nan_to_num(standardized_array)
 
     def alpha_space(self, alpha):
         # fit
@@ -156,12 +171,8 @@ class CPCA(TransformerMixin):
 
         # transform
         reduced_dataset = dataset.dot(v_top)
-        # todo: why only first two dimensions?
-        sign_vector = np.sign(reduced_dataset, axis=0)
+        sign_vector = np.sign(reduced_dataset[0, :])
         reduced_dataset = reduced_dataset * sign_vector
-
-        # reduced_dataset[:, 0] = reduced_dataset[:, 0]*np.sign(reduced_dataset[0, 0])
-        # reduced_dataset[:, 1] = reduced_dataset[:, 1]*np.sign(reduced_dataset[0, 1])
         return reduced_dataset
 
     # def reverse_transform(self, dataset):
@@ -180,51 +191,43 @@ class CPCA(TransformerMixin):
             The final return value is the data projected into the top n subspaces with (n_components = 2)
             subspaces, which can be plotted outside of this function
         """
-        best_alpha = self.find_spectral_alphas()
+        pass
+        # best_alpha = self.find_spectral_alphas()
         # data_to_plot = []
         # for alpha in best_alphas:
         #     transformed_dataset = self.cpca_alpha(dataset=dataset, alpha=alpha)
         #     data_to_plot.append(transformed_dataset)
-        return best_alphas
+        # return best_alphas
 
-    def find_spectral_alphas(self):
+    def find_spectral_alphas(self, dataset):
         """
             This method performs spectral clustering on the affinity matrix of subspaces
             returned by contrastive pca, and returns (n_alphas_to_return) exemplar values of alpha
         """
-        self.affinity_matrix = self.create_affinity_matrix()
+        self.affinity_matrix = self.create_affinity_matrix(dataset)
         alphas = self.generate_alphas()
         # todo: actually we dont know if we can represent similarities in n_alphas_to-return clusters?
         # what if the medium value of the cluster is in a land of nowhere in-between two bubbles?
-        spectral = cluster.SpectralClustering(n_clusters=self.n_alphas_to_return, affinity='precomputed')
+        spectral = SpectralClustering(n_clusters=self.n_alphas_to_return, affinity='precomputed')
         spectral.fit(self.affinity_matrix)
         labels = spectral.labels_
         
         best_alphas = list()
-        best_distance = None
-        best_alpha = None
         for i in range(self.n_alphas_to_return):
-            # todo: how do we know which works best?
             idx = np.where(labels == i)[0]
             if not(0 in idx):  # because we don't want to include the cluster that includes alpha=0 #todo: ????
+                # how do we know if the that the first item belongs to the cluster and
+                # that the cluster belongs to alpha=0?
                 affinity_submatrix = self.affinity_matrix[idx][:, idx]
                 sum_affinities = np.sum(affinity_submatrix, axis=0)
-                # this should be the cluster center?
-                # take the one where the affinity sum is biggest
-                # = where foreground and background are most dissimilarly represented
-                max_affinity_sum = np.max(sum_affinities)
                 best_cluster_alpha = alphas[idx[np.argmax(sum_affinities)]]
-                if best_distance is None:
-                    best_distance = max_affinity_sum
-                    best_alpha = best_cluster_alpha
-                elif max_affinity_sum > best_distance:
-                    best_distance = max_affinity_sum
-                    best_alpha = best_cluster_alpha
                 best_alphas.append(best_cluster_alpha)
-        best_alphas = np.concatenate(([0], best_alphas))  # one of the alphas is always alpha=0
-        return best_alpha
 
-    def create_affinity_matrix(self):
+        # one of the alphas is always alpha=0
+        best_alphas = np.sort(np.concatenate(([0], best_alphas)))
+        return best_alphas
+
+    def create_affinity_matrix(self, dataset):
         """
             This method creates the affinity matrix of subspaces returned by contrastive pca
         """
@@ -234,7 +237,7 @@ class CPCA(TransformerMixin):
         affinity = 0.5*np.identity(k)  # it gets doubled
         for alpha in alphas:
             v_top = self.alpha_space(alpha=alpha)
-            space = self.cpca_alpha(dataset=self.fg, v_top=v_top, alpha=alpha)
+            space = self.cpca_alpha(dataset=dataset, v_top=v_top, alpha=alpha)
             q, r = np.linalg.qr(space)
             subspaces.append(q)
         for i in range(k):
@@ -242,10 +245,27 @@ class CPCA(TransformerMixin):
                 v0 = subspaces[i]
                 v1 = subspaces[j]
                 u, s, v = np.linalg.svd(v0.T.dot(v1))
-                affinity[i, j] = np.prod([np.cos(eigendings) for eigendings in s])
-                affinity[i, j] = s[0]*s[1]
+                affinity[i, j] = np.prod([eigen_vec for eigen_vec in s])
         affinity = affinity + affinity.T
         return np.nan_to_num(affinity)
+
+    def select_most_discriminating_alpha(self, dataset, labels, best_alpha_values, case='classification'):
+        silhouettes = list()
+        for alpha in best_alpha_values:
+            v_top = self.alpha_space(alpha=alpha)
+            space = self.cpca_alpha(dataset=dataset, v_top=v_top, alpha=alpha)
+            if case == 'classification':
+                silhouettes.append(silhouette_score(space, labels))
+                best_alpha = best_alpha_values[np.argmax(silhouettes)]
+            else:
+                # regression
+                lin_model = LinearRegression()
+                lin_model.fit(space, labels)
+                predictions = lin_model.predict(space)
+                sum_of_residuals = np.sum(np.abs(predictions - labels))
+                silhouettes.append(sum_of_residuals)
+                best_alpha = best_alpha_values[np.argmin(silhouettes)]
+        return best_alpha
 
     def all_cpca(self, dataset):
         """
@@ -253,12 +273,13 @@ class CPCA(TransformerMixin):
             active and background dataset. It returns the cPCA-reduced data for all values of alpha specified,
             both the active and background, as well as the list of alphas
         """
-        alphas = self.generate_alphas()
-        data_to_plot = []
-        for alpha in alphas:
-            transformed_dataset = self.cpca_alpha(dataset=dataset, alpha=alpha)
-            data_to_plot.append(transformed_dataset)
-        return data_to_plot, alphas
+        pass
+        # alphas = self.generate_alphas()
+        # data_to_plot = []
+        # for alpha in alphas:
+        #     transformed_dataset = self.cpca_alpha(dataset=dataset, alpha=alpha)
+        #     data_to_plot.append(transformed_dataset)
+        # return data_to_plot, alphas
 
     def gui(self, background, foreground, active_labels=None, colors=['k', 'r', 'b', 'g', 'c']):
 
@@ -336,51 +357,36 @@ class CPCA(TransformerMixin):
 
         return
 
-    def plot(self, background, foreground, active_labels=None, colors=['k', 'r', 'b', 'g', 'c']):
-
-        if self.alpha_selection == 'all':
-            raise ValueError('The plot function cannot be used if alpha_selection is set to "all"')
-
-        if not self.n_components == 2:
+    def plot(self, foreground, labels=None, mode='', colors=['k', 'r', 'b', 'g', 'c']):
+        if self.n_components > 3:
             raise Warning('Plot cannot be used if the number of components is not 2. '
                           'Plot will only use the first two components.')
 
-        try:
-            import matplotlib.pyplot as plt
-        except ImportError:
-            raise ImportError("Something wrong while loading matplotlib.pyplot! "
-                              "You probably don't have plotting libraries installed.")
+        if labels is None:
+            labels = np.ones(foreground.shape[0])
 
-        if active_labels is None:
-            active_labels = np.ones(foreground.shape[0])
+        if mode == 'all':
+            alphas = self.generate_alphas()
+        else:
+            alphas = self.alpha_values
+        n_alphas = len(alphas)
 
-        if self.alpha_selection == 'auto':
-            transformed_data, best_alphas = self.automated_cpca(foreground)
-
-            plt.figure(figsize=[14, 3])
-
-            for j, fg in enumerate(transformed_data):
-                plt.subplot(1, 4, j + 1)
-                for i, l in enumerate(np.sort(np.unique(self.active_labels))):
-                    idx = np.where(self.active_labels == l)
-                    plt.scatter(fg[idx, 0], fg[idx, 1], color=self.colors[i % len(self.colors)], alpha=0.6,
-                                label='Class ' + str(i))
-                plt.title('Alpha=' + str(np.round(best_alphas[j], 2)))
-            if len(np.unique(self.active_labels)) > 1:
-                plt.legend()
-            plt.show()
-
-        elif self.alpha_selection == 'manual':
-            fg = self.cpca_alpha(foreground, self.alpha_value)
-            plt.figure(figsize=[6, 6])
-            for i, l in enumerate(np.sort(np.unique(active_labels))):
-                idx = np.where(active_labels == l)
-                plt.scatter(fg[idx, 0], fg[idx, 1], color=self.colors[i % len(self.colors)], alpha=0.6,
+        unique_labels = np.sort(np.unique(labels))
+        num_colors = len(colors)
+        fig = plt.figure(figsize=[14, 3])
+        for j, a in enumerate(alphas):
+            v_top = self.alpha_space(alpha=a)
+            fg = self.cpca_alpha(dataset=foreground, v_top=v_top, alpha=a)
+            plt.subplot(1, n_alphas, j + 1)
+            for i, l in enumerate(unique_labels):
+                idx = np.where(labels == l)
+                plt.scatter(fg[idx, 0], fg[idx, 1], color=colors[i % num_colors], alpha=0.6,
                             label='Class ' + str(i))
-            plt.title('Alpha=' + str(self.alpha_value))
+            plt.title('α=' + str(np.round(a, 2)))
+        if len(unique_labels) > 1:
             plt.legend()
-            plt.show()
-
+        # plt.tight_layout()
+        plt.show()
         return
 
 
