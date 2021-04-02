@@ -357,7 +357,7 @@ class CPCA(TransformerMixin):
 
         return
 
-    def plot(self, foreground, labels=None, mode='', colors=['k', 'r', 'b', 'g', 'c']):
+    def plot(self, foreground, labels=None, mode='', colors=['k', 'r', 'b', 'g', 'c'], background=None):
         if self.n_components > 3:
             raise Warning('Plot cannot be used if the number of components is not 2. '
                           'Plot will only use the first two components.')
@@ -382,6 +382,9 @@ class CPCA(TransformerMixin):
                 idx = np.where(labels == l)
                 plt.scatter(fg[idx, 0], fg[idx, 1], color=colors[i % num_colors], alpha=0.6,
                             label='Class ' + str(i))
+            if background is not None:
+                bg = self.cpca_alpha(background, v_top, a)
+                plt.scatter(bg[:, 0], bg[:, 1], color='green')
             plt.title('α=' + str(np.round(a, 2)))
         if len(unique_labels) > 1:
             plt.legend()

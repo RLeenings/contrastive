@@ -1,5 +1,4 @@
 import numpy as np
-import matplotlib.pyplot as plt
 from contrastive import CPCA
 
 data = np.genfromtxt('datasets/mHealth_subject1.log',
@@ -19,6 +18,6 @@ background = data[background_idx]
 
 mdl = CPCA(n_components=2, max_log_alpha=5, standardize=False)
 projected_data = mdl.fit_transform(target, background, labels)
-mdl.plot(target, labels=labels)
+mdl.plot(target, labels=labels, background=background)
 
 debug = True
