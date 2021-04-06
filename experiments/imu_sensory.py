@@ -16,7 +16,7 @@ target = data[target_idx]
 background_idx = np.where(classes == 3)[0]  # lying still
 background = data[background_idx]
 
-mdl = CPCA(n_components=2, max_log_alpha=5, standardize=False)
+mdl = CPCA(n_components=3, max_log_alpha=5, standardize=False)
 projected_data = mdl.fit_transform(target, background, labels)
 mdl.plot(target, labels=labels, background=background)
 

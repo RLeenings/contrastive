@@ -157,7 +157,8 @@ class CPCA(TransformerMixin):
     def alpha_space(self, alpha):
         # fit
         sigma = self.fg_cov - alpha * self.bg_cov
-        w, v = LA.eig(sigma)
+        # w, v = LA.eig(sigma)
+        w, v = LA.eigh(sigma)
         eig_idx = np.argpartition(w, -self.n_components)[-self.n_components:]
         eig_idx = eig_idx[np.argsort(-w[eig_idx])]
         v_top = v[:, eig_idx]
@@ -377,14 +378,25 @@ class CPCA(TransformerMixin):
         for j, a in enumerate(alphas):
             v_top = self.alpha_space(alpha=a)
             fg = self.cpca_alpha(dataset=foreground, v_top=v_top, alpha=a)
-            plt.subplot(1, n_alphas, j + 1)
+            if self.n_components == 3:
+                plt.subplot(1, n_alphas, j+1, projection='3d')
+            else:
+                plt.subplot(1, n_alphas, j + 1)
             for i, l in enumerate(unique_labels):
                 idx = np.where(labels == l)
-                plt.scatter(fg[idx, 0], fg[idx, 1], color=colors[i % num_colors], alpha=0.6,
-                            label='Class ' + str(i))
+                if self.n_components == 3:
+                    plt.scatter(fg[idx, 0], fg[idx, 1], fg[idx, 2],
+                                color=colors[i % num_colors], alpha=0.6,
+                                label='Class ' + str(i))
+                else:
+                    plt.scatter(fg[idx, 0], fg[idx, 1], color=colors[i % num_colors], alpha=0.6,
+                                label='Class ' + str(i))
             if background is not None:
                 bg = self.cpca_alpha(background, v_top, a)
-                plt.scatter(bg[:, 0], bg[:, 1], color='green')
+                if self.n_components == 3:
+                    plt.scatter(bg[:, 0], bg[:, 1], bg[:, 2], color='green')
+                else:
+                    plt.scatter(bg[:, 0], bg[:, 1], color='green')
             plt.title('α=' + str(np.round(a, 2)))
         if len(unique_labels) > 1:
             plt.legend()
