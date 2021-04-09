@@ -1,3 +1,4 @@
+import warnings
 import numpy as np
 from numpy import linalg as LA
 from sklearn.cluster import SpectralClustering
@@ -99,7 +100,8 @@ class CPCA(TransformerMixin):
 
         if features_d > self.preprocess_with_pca_dim:
             data = np.concatenate((fg, bg), axis=0)
-            self.pca = PCA(n_components=self.preprocess_with_pca_dim)
+            n_components = min(min(n_fg, self.preprocess_with_pca_dim), min(n_bg, self.preprocess_with_pca_dim))
+            self.pca = PCA(n_components=n_components)
             data = self.pca.fit_transform(data)
             fg = data[:n_fg, :]
             bg = data[n_fg:, :]
@@ -123,7 +125,7 @@ class CPCA(TransformerMixin):
         if self.alpha_selection not in ['auto', 'manual', 'all']:
             raise ValueError("Invalid argument for parameter alpha_selection: must be 'auto' or 'manual' or 'all'")
 
-        if not self.alpha_value and self.alpha_selection == 'manual':
+        if self.alpha_value is None and self.alpha_selection == 'manual':
             raise ValueError('The the alpha_selection parameter is set to "manual", '
                              'the alpha_value parameter must be provided')
 
@@ -146,7 +148,10 @@ class CPCA(TransformerMixin):
             raise NotFittedError("This model has not been fit to a foreground/background dataset yet. "
                                  "Please run the fit() function first.")
 
-        # todo: preprocess with pca if dimension of dataset was too big
+        # preprocess with pca if dimension of dataset was too big
+        if self.pca is not None:
+            dataset = self.pca.transform(dataset)
+
         transformed_data = self.cpca_alpha(dataset, self.v_top, self.alpha_value)
         return transformed_data
 
@@ -154,15 +159,25 @@ class CPCA(TransformerMixin):
         standardized_array = (array - np.mean(array, axis=0)) / np.std(array, axis=0)
         return np.nan_to_num(standardized_array)
 
-    def alpha_space(self, alpha):
+    def alpha_space(self, alpha, n_samples=None):
         # fit
         sigma = self.fg_cov - alpha * self.bg_cov
         # w, v = LA.eig(sigma)
         w, v = LA.eigh(sigma)
+
         eig_idx = np.argpartition(w, -self.n_components)[-self.n_components:]
         eig_idx = eig_idx[np.argsort(-w[eig_idx])]
         v_top = v[:, eig_idx]
-        return v_top
+
+        if n_samples is not None:
+            # todo: check if that is correct
+            # Get variance explained by singular values
+            explained_variance_ = (w ** 2) / (n_samples - 1)
+            total_var = explained_variance_.sum()
+            explained_variance_ratio_ = explained_variance_ / total_var
+            return v_top, explained_variance_ratio_[:self.n_components]
+        else:
+            return v_top
 
     def cpca_alpha(self, dataset, v_top, alpha=1):
         """
@@ -358,16 +373,26 @@ class CPCA(TransformerMixin):
 
         return
 
-    def plot(self, foreground, labels=None, mode='', colors=['k', 'r', 'b', 'g', 'c'], background=None):
+    def plot(self, foreground, labels=None, background=None, alpha_values=None, mode='', plot_dim=2,
+             colors=['k', 'r', 'b', 'g', 'c'], title=""):
         if self.n_components > 3:
-            raise Warning('Plot cannot be used if the number of components is not 2. '
+             warnings.warn('Plot cannot be used if the number of components is not 2. '
                           'Plot will only use the first two components.')
+
+        # preprocess with pca if dimension of dataset was too big
+        if self.pca is not None:
+            foreground = self.pca.transform(foreground)
+            if background is not None:
+                background = self.pca.transform(background)
 
         if labels is None:
             labels = np.ones(foreground.shape[0])
 
         if mode == 'all':
-            alphas = self.generate_alphas()
+            if alpha_values is None:
+                alphas = self.generate_alphas()
+            else:
+                alphas = alpha_values
         else:
             alphas = self.alpha_values
         n_alphas = len(alphas)
@@ -375,31 +400,43 @@ class CPCA(TransformerMixin):
         unique_labels = np.sort(np.unique(labels))
         num_colors = len(colors)
         fig = plt.figure(figsize=[14, 3])
+        if title:
+            fig.suptitle(title)
         for j, a in enumerate(alphas):
-            v_top = self.alpha_space(alpha=a)
+            v_top, explained_variance = self.alpha_space(alpha=a, n_samples=foreground.shape[0])
             fg = self.cpca_alpha(dataset=foreground, v_top=v_top, alpha=a)
-            if self.n_components == 3:
+            if plot_dim == 3:
                 plt.subplot(1, n_alphas, j+1, projection='3d')
+                explained_var = np.sum(explained_variance[:2])
             else:
                 plt.subplot(1, n_alphas, j + 1)
-            for i, l in enumerate(unique_labels):
-                idx = np.where(labels == l)
-                if self.n_components == 3:
-                    plt.scatter(fg[idx, 0], fg[idx, 1], fg[idx, 2],
-                                color=colors[i % num_colors], alpha=0.6,
-                                label='Class ' + str(i))
+                explained_var = np.sum(explained_variance[:1])
+            if len(unique_labels) < 5 or isinstance(unique_labels[0], str):
+                for i, l in enumerate(unique_labels):
+                    idx = np.where(labels == l)
+                    if plot_dim == 3:
+                        plt.scatter(fg[idx, 0], fg[idx, 1], fg[idx, 2],
+                                    color=colors[i % num_colors], alpha=0.6,
+                                    label='Class ' + str(i))
+                    else:
+                        plt.scatter(fg[idx, 0], fg[idx, 1], color=colors[i % num_colors], alpha=0.6,
+                                    label='Class ' + str(i))
+            else:
+                label_alphas = (labels - np.min(labels)) / (np.max(labels) - np.min(labels))
+                if plot_dim == 3:
+                    plt.scatter(fg[:, 0], fg[:, 1], fg[:, 2], alpha=label_alphas)
                 else:
-                    plt.scatter(fg[idx, 0], fg[idx, 1], color=colors[i % num_colors], alpha=0.6,
-                                label='Class ' + str(i))
+                    plt.scatter(fg[:, 0], fg[:, 1], alpha=label_alphas)
+
             if background is not None:
                 bg = self.cpca_alpha(background, v_top, a)
-                if self.n_components == 3:
+                if plot_dim == 3:
                     plt.scatter(bg[:, 0], bg[:, 1], bg[:, 2], color='green')
                 else:
                     plt.scatter(bg[:, 0], bg[:, 1], color='green')
-            plt.title('α=' + str(np.round(a, 2)))
-        if len(unique_labels) > 1:
-            plt.legend()
+            plt.title('α=' + str(np.round(a, 2)) + '\nexp_var=' + str(np.round(explained_var, 2)), fontsize=10)
+        if 1 < len(unique_labels) < 5:
+            plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left', borderaxespad=0.)
         # plt.tight_layout()
         plt.show()
         return
