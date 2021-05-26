@@ -51,7 +51,7 @@ class CPCA(TransformerMixin):
         self.v_top = None
         self.alpha_values = None
 
-    def fit_transform(self, foreground, background, labels=None):
+    def fit_transform(self, foreground, background, labels=None, gui=False):
         """
             Finds the covariance matrices of the foreground and background datasets,
             and then transforms the foreground dataset based on the principal contrastive components
@@ -207,13 +207,13 @@ class CPCA(TransformerMixin):
             The final return value is the data projected into the top n subspaces with (n_components = 2)
             subspaces, which can be plotted outside of this function
         """
-        pass
-        # best_alpha = self.find_spectral_alphas()
-        # data_to_plot = []
-        # for alpha in best_alphas:
-        #     transformed_dataset = self.cpca_alpha(dataset=dataset, alpha=alpha)
-        #     data_to_plot.append(transformed_dataset)
-        # return best_alphas
+        # pass
+        best_alphas = self.find_spectral_alphas()
+        data_to_plot = []
+        for alpha in best_alphas:
+            transformed_dataset = self.cpca_alpha(dataset=dataset, alpha=alpha)
+            data_to_plot.append(transformed_dataset)
+        return best_alphas
 
     def find_spectral_alphas(self, dataset):
         """
@@ -289,13 +289,15 @@ class CPCA(TransformerMixin):
             active and background dataset. It returns the cPCA-reduced data for all values of alpha specified,
             both the active and background, as well as the list of alphas
         """
-        pass
-        # alphas = self.generate_alphas()
-        # data_to_plot = []
-        # for alpha in alphas:
-        #     transformed_dataset = self.cpca_alpha(dataset=dataset, alpha=alpha)
-        #     data_to_plot.append(transformed_dataset)
-        # return data_to_plot, alphas
+        # pass
+        alphas = self.generate_alphas()
+        data_to_plot = []
+        print(alphas)
+        for alpha in alphas:
+            transformed_dataset = self.cpca_alpha(dataset=dataset, alpha=alpha)
+            data_to_plot.append(transformed_dataset)
+        print(data_to_plot)
+        return data_to_plot, alphas
 
     def gui(self, background, foreground, active_labels=None, colors=['k', 'r', 'b', 'g', 'c']):
 
@@ -307,7 +309,7 @@ class CPCA(TransformerMixin):
             raise Warning('Plot cannot be used if the number of components is not 2. '
                           'Plot will only use the first two components.')
 
-        if (foreground.shape[0] > 1000):
+        if foreground.shape[0] > 1000:
             print("The GUI may be slow to respond with large numbers of data points. "
                   "Consider using a subset of the original data.")
 
