@@ -100,20 +100,16 @@ class CPCA(TransformerMixin):
 
         if features_d > self.preprocess_with_pca_dim:
             data = np.concatenate((fg, bg), axis=0)
-<<<<<<< HEAD
-            self.preprocess_with_pca_dim = min(self.preprocess_with_pca_dim, n_fg)
-            self.pca = PCA(n_components=self.preprocess_with_pca_dim)
-=======
             n_components = min(min(n_fg, self.preprocess_with_pca_dim), min(n_bg, self.preprocess_with_pca_dim))
             self.pca = PCA(n_components=n_components)
->>>>>>> c15e37fc92b41950d978dae54406b1d4a69b2ebf
+
             data = self.pca.fit_transform(data)
             fg = data[:n_fg, :]
             bg = data[n_fg:, :]
             features_d = self.preprocess_with_pca_dim
 
             if self.verbose:
-                print("Data dimensionality reduced to " + str(self.preprocess_with_pca_dim) +
+                print("Data dimensionality reduced to " + str(n_components) +
                       ". Percent variation retained: ~" + str(int(100*np.sum(self.pca.explained_variance_ratio_)))+'%')
 
         if self.verbose:
@@ -473,7 +469,10 @@ class Kernel_CPCA(CPCA):
     def transform(self, dataset, alpha_selection='auto', n_alphas=40, max_log_alpha=3, n_alphas_to_return=4, plot=False, gui=False, active_labels = None, colors=None, legend=None, alpha_value=None, return_alphas=False):
         raise ValueError("For Kernel CPCA, the transform() function is not defined. Please use the fit_transform() function directly")
 
-    def cpca_alpha(self, alpha,degree=2,coef0=1):
+    def cpca_alpha(self, alpha,degree=2,coef0=1,method="rbf"):
+        gamma = 0
+        squareform = 0
+        pdist= 0
         N=self.n_fg + self.n_bg
         Z=np.concatenate([self.fg,self.bg],axis=0)
 
