@@ -99,6 +99,7 @@ class CPCA(TransformerMixin):
 
         if features_d > self.preprocess_with_pca_dim:
             data = np.concatenate((fg, bg), axis=0)
+            self.preprocess_with_pca_dim = min(self.preprocess_with_pca_dim, n_fg)
             self.pca = PCA(n_components=self.preprocess_with_pca_dim)
             data = self.pca.fit_transform(data)
             fg = data[:n_fg, :]
