@@ -1,2 +1,4 @@
 experiments/MNIST_data/*
 experiments/private/*
+own_examples/*
+.idea/*

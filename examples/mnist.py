@@ -13,7 +13,7 @@ X, y = X[:5000], y[:5000].astype(int)
 y_binary = (y == 2).astype(int)
 
 # comparison between both
-auto_cpca = AutoCPCA(n_components=2, alpha=1.5, bg_strategy="zero")
+auto_cpca = AutoCPCA(n_components=2, alpha=2, bg_strategy="zero")
 normal_pca = PCA(n_components=2)
 
 # build fg and bg only on train_set

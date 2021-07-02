@@ -22,23 +22,26 @@ from sklearn.preprocessing import StandardScaler
 mask = BrainMask(mask_image='MNI_ICBM152_GrayMatter', extract_mode='vec')
 X = mask.transform(X)
 print("BrainMask - done.")
-X = StandardScaler().fit_transform(X)
 #X = SelectPercentile(percentile=0.1).fit_transform(X, y)
 print(X.shape)
 
 # comparison between both
-auto_cpca = AutoCPCA(n_components=2, alpha=6, bg_strategy="both")
+auto_cpca = AutoCPCA(n_components=2, alpha=2, bg_strategy="both")
 normal_pca = PCA(n_components=2)
 
 y = y_gender
 # build fg and bg only on train_set
 a = StratifiedShuffleSplit(1, test_size=0.2)
 for train_index, test_index in a.split(X, y):
-    auto_cpca.fit(X[train_index], y[train_index])
-    normal_pca.fit(X[train_index],y[train_index])
+    scaler = StandardScaler()
+    X_train = scaler.fit_transform(X[train_index])
 
-    trans_normal_pca_X = normal_pca.transform(X[test_index])
-    trans_X = auto_cpca.transform(X[test_index])
+    X_test = scaler.transform(X[test_index])
+    auto_cpca.fit(X_train, y[train_index])
+    normal_pca.fit(X_train,y[train_index])
+
+    trans_normal_pca_X = normal_pca.transform(X_test)
+    trans_X = auto_cpca.transform(X_test)
 
 plt.subplot(2, 2, 1)
 plt.scatter(trans_normal_pca_X[:, 0], trans_normal_pca_X[:, 1], c=y_gender[test_index], cmap=plt.cm.coolwarm)

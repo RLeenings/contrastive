@@ -1,6 +1,5 @@
 from sklearn.base import TransformerMixin, BaseEstimator
 import numpy as np
-from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
 
 
@@ -52,17 +51,11 @@ class AutoCPCA(TransformerMixin, BaseEstimator):
 
         fg, bg0, bg1 = self.divide(X, y)  # backgrounds: list of n_classes
 
-        fg = StandardScaler().fit_transform(fg)
-        bg0 = StandardScaler().fit_transform(bg0)
-        bg1 = StandardScaler().fit_transform(bg1)
-
         if fg.shape[1] > self.preprocess_with_pca_dim:
-            data = np.concatenate((fg, bg0, bg1), axis=0)
-            self.pca = PCA(n_components=np.min([len(data), self.preprocess_with_pca_dim]))
-            data = self.pca.fit_transform(data)
-            fg = data[:fg.shape[0], :]
-            bg0 = data[fg.shape[0]:fg.shape[0] + bg0.shape[0], :]
-            bg1 = data[fg.shape[0] + bg0.shape[0]:, :]
+            self.pca = PCA(n_components=np.min([len(fg), self.preprocess_with_pca_dim]))
+            fg = self.pca.fit_transform(fg)
+            bg0 = self.pca.transform(bg0)
+            bg1 = self.pca.transform(bg1)
 
             if self.verbose:
                 print("Data dimensionality reduced to " + str(self.preprocess_with_pca_dim) +
@@ -70,9 +63,13 @@ class AutoCPCA(TransformerMixin, BaseEstimator):
                     int(100 * np.sum(self.pca.explained_variance_ratio_))) + '%')
 
         # Calculate the covariance matrices
-        self.bg_cov0 = bg0.T.dot(bg0) / (bg0.shape[0] - 1)
-        self.bg_cov1 = bg1.T.dot(bg1) / (bg1.shape[0] - 1)
-        self.fg_cov = fg.T.dot(fg) / (fg.shape[0] - 1)
+        self.bg_cov0 = np.cov(bg0.T)
+        self.bg_cov1 = np.cov(bg1.T)
+        self.fg_cov = np.cov(fg.T)
+
+        self.fg_cov = (self.fg_cov - self.fg_cov.mean(axis=0))
+        self.bg_cov0 = (self.bg_cov0 - self.bg_cov0.mean(axis=0))
+        self.bg_cov1 = (self.bg_cov1 - self.bg_cov1.mean(axis=0))
 
         self.cpca_alpha()
 
@@ -83,11 +80,7 @@ class AutoCPCA(TransformerMixin, BaseEstimator):
         if self.pca is not None and X.shape[1] > self.preprocess_with_pca_dim:
             X = self.pca.transform(X)
         reduced_dataset = X.dot(self.v_top)
-        sign_vector = np.sign(reduced_dataset[0, :])
-        reduced_dataset = reduced_dataset * sign_vector
 
-        for nc in range(self.n_components):  # for-loop only for demonstration (faster in one computation)
-            reduced_dataset[:, nc] = reduced_dataset[:, nc] * np.sign(reduced_dataset[0, nc])
         return reduced_dataset
 
     def cpca_alpha(self):
@@ -104,10 +97,10 @@ class AutoCPCA(TransformerMixin, BaseEstimator):
         else:
             alpha0, alpha1 = 0, self.alpha
         sigma = self.fg_cov - alpha0 * self.bg_cov0 - alpha1 * self.bg_cov1
-        w, v = np.linalg.eig(sigma)
+        w, v = np.linalg.eigh(sigma)
         eig_idx = np.argpartition(w, -self.n_components)[-self.n_components:]
         eig_idx = eig_idx[np.argsort(-w[eig_idx])]
-        self.v_top = np.real(v[:, eig_idx])  # real or abs -> have to check!
+        self.v_top = np.real(v[:, eig_idx])  # sigma is quasi symm. -> imaginary part only numerical reasons
 
     def divide(self, X, y):
         bg0 = X[y == 0]  # background 1
