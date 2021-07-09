@@ -83,6 +83,12 @@ class AutoCPCA(TransformerMixin, BaseEstimator):
 
         return reduced_dataset
 
+    def inverse_transform(self, X, y=None):
+        X = X.dot(self.v_top.T)
+        if self.pca is not None:
+            X = self.pca.inverse_transform(X)
+        return X
+
     def cpca_alpha(self):
         """
             Returns active and bg dataset projected in the cpca direction,
